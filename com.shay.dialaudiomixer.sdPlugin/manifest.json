@@ -1,0 +1,42 @@
+{
+  "Actions": [
+    {
+      "Name": "DialAudioMixer+",
+      "UUID": "com.shay.dialaudiomixer.action",
+      "Icon": "images/actionIcon",
+      "PropertyInspectorPath": "propertyinspector/inspector.html",
+      "Tooltip": "Dynamic Audio Mixer for Dial",
+      "SupportedInMultiActions": true,
+      "Encoder": {
+        "layout": "$B1"
+      },
+      "States": [
+        {
+          "Image": "state-image"
+        }
+      ],
+      "Controllers": ["Encoder"]
+    }
+  ],
+  "UUID": "com.shay.dialaudiomixer",
+  "SDKVersion": 2,
+  "MinimumVersion": "7.0.0",
+  "Author": "Shay",
+  "Name": "DialAudioMixer+",
+  "URL": "https://example.com/",
+  "Icon": "images/icon",
+  "Version": "1.0",
+  "Description": "Automatic per-application audio mixer with dynamic detection and exclusion list.",
+  "Category": "Audio",
+  "CategoryIcon": "images/icon",
+  "CodePath": "plugin.html",
+  "Software": {
+    "MinimumVersion": "7.0.0"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ]
+}

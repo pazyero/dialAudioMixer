@@ -1,0 +1,6 @@
+flask
+psutil
+pywin32
+Pillow
+pycaw
+comtypes

@@ -1,0 +1,270 @@
+import psutil
+import json
+from flask import Flask, request, jsonify
+from icon_extractor import extract_icon
+import os
+import base64
+import tempfile
+import logging
+
+# pycaw（Windows用オーディオ制御）インポート試行
+try:
+    from pycaw.pycaw import AudioUtilities, ISimpleAudioVolume
+    from comtypes import CLSCTX_ALL
+    PYCAW_AVAILABLE = True
+except Exception:
+    PYCAW_AVAILABLE = False
+
+# =======================
+# Flask アプリ初期化
+# =======================
+app = Flask(__name__)
+
+# Flask/Werkzeugのアクセスログを非表示（HTTP GET/POST行を抑制）
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
+app.logger.disabled = True
+
+EXCLUDE_FILE = "exclude.json"
+
+# 初期化: 除外リストファイルが無ければ作成
+if not os.path.exists(EXCLUDE_FILE):
+    with open(EXCLUDE_FILE, "w", encoding="utf-8") as f:
+        json.dump([], f)
+
+# =======================
+# 除外リスト読み込み/保存
+# =======================
+def load_excluded():
+    """除外リストを読み込む"""
+    with open(EXCLUDE_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def save_excluded(lst):
+    """除外リストを保存"""
+    with open(EXCLUDE_FILE, "w", encoding="utf-8") as f:
+        json.dump(lst, f, indent=2)
+
+# =======================
+# /apps : 音声セッションのあるアプリ一覧取得
+# =======================
+@app.get("/apps")
+def list_audio_apps():
+    """アクティブ音声セッションのあるプロセス一覧を返す"""
+    excluded = load_excluded()
+    result = []
+    seen_names = set()
+    
+    if PYCAW_AVAILABLE:
+        # pycawが利用可能な場合、音声セッションからPIDを取得
+        try:
+            sessions = AudioUtilities.GetAllSessions()
+            audio_pids = {session.Process.pid for session in sessions if session.Process}
+            
+            # 除外リストと重複を除いてアプリ情報作成
+            for pid in audio_pids:
+                try:
+                    p = psutil.Process(pid)
+                    name_with_ext = p.name()
+                    name, ext = os.path.splitext(name_with_ext)  # ext = ".exe", name = "Discord"
+                    if name not in excluded and name not in seen_names:
+                        result.append({"pid": pid, "name": name})
+                        seen_names.add(name)
+                except Exception:
+                    pass
+        except Exception as e:
+            print(f"[/apps] ERROR: {e}")
+    else:
+        # pycawが利用できない場合は全プロセスを返す（重複除去）
+        for p in psutil.process_iter(["pid", "name"]):
+            name = p.info["name"]
+            if name not in excluded and name not in seen_names:
+                result.append({"pid": p.info["pid"], "name": name})
+                seen_names.add(name)
+    
+    return jsonify(result)
+
+# =======================
+# /exclude : アプリ名を除外リストに追加
+# =======================
+@app.get("/exclude")
+def add_exclude():
+    name = request.args.get("name")
+    if not name:
+        return jsonify({"status": "error", "message": "missing name"}), 400
+    excluded = load_excluded()
+    if name not in excluded:
+        excluded.append(name)
+        save_excluded(excluded)
+    return jsonify({"status": "ok"})
+
+# =======================
+# /unexclude : アプリ名を除外リストから削除
+# =======================
+@app.get("/unexclude")
+def remove_exclude():
+    name = request.args.get("name")
+    if not name:
+        return jsonify({"status": "error", "message": "missing name"}), 400
+    excluded = load_excluded()
+    if name in excluded:
+        excluded.remove(name)
+        save_excluded(excluded)
+    return jsonify({"status": "ok"})
+
+# =======================
+# /volume : 音量を増減（低遅延で取得用）
+# =======================
+@app.get("/volume")
+def change_volume():
+    if not PYCAW_AVAILABLE:
+        return jsonify({"status": "error", "message": "pycaw not installed"}), 500
+    
+    pid_arg = request.args.get("pid")
+    delta_arg = request.args.get("delta")
+    try:
+        pid = int(pid_arg)
+        delta = int(delta_arg)
+    except Exception:
+        return jsonify({"status": "error", "message": "invalid pid or delta"}), 400
+
+    sessions = AudioUtilities.GetAllSessions()
+    matched = False
+    final_volume = None
+
+    for session in sessions:
+        proc = session.Process
+        if proc and proc.pid == pid:
+            try:
+                volume = session._ctl.QueryInterface(ISimpleAudioVolume)
+                try:
+                    current = volume.GetMasterVolume()
+                except Exception:
+                    current = 0.0
+                new = min(1.0, max(0.0, current + (delta / 100.0)))
+                volume.SetMasterVolume(new, None)
+                matched = True
+                final_volume = new
+            except Exception as e:
+                return jsonify({"status": "error", "message": str(e)}), 500
+
+    if not matched:
+        return jsonify({"status": "error", "message": "audio session not found for pid"}), 404
+
+    return jsonify({"status": "ok", "volume": final_volume})
+
+# =======================
+# /volume_set : 絶対値で音量設定
+# =======================
+@app.get("/volume_set")
+def set_volume_absolute():
+    if not PYCAW_AVAILABLE:
+        return jsonify({"status": "error", "message": "pycaw not installed"}), 500
+    
+    pid_arg = request.args.get("pid")
+    vol_arg = request.args.get("vol")
+    try:
+        pid = int(pid_arg)
+        vol = float(vol_arg)
+    except Exception:
+        return jsonify({"status": "error", "message": "invalid pid or vol"}), 400
+
+    vol = min(1.0, max(0.0, vol))
+    sessions = AudioUtilities.GetAllSessions()
+    matched = False
+
+    for session in sessions:
+        proc = session.Process
+        if proc and proc.pid == pid:
+            try:
+                volume = session._ctl.QueryInterface(ISimpleAudioVolume)
+                volume.SetMasterVolume(vol, None)
+                matched = True
+            except Exception as e:
+                return jsonify({"status": "error", "message": str(e)}), 500
+
+    if not matched:
+        return jsonify({"status": "error", "message": "audio session not found for pid"}), 404
+
+    return jsonify({"status": "ok", "volume": vol})
+
+# =======================
+# /_log : デバッグログ受信
+# =======================
+@app.get("/_log")
+def receive_log():
+    m = request.args.get("m")
+    try:
+        print(f"[main.js] {m}")
+    except Exception:
+        print("[main.js] <unprintable message>")
+    return jsonify({"status": "ok"})
+
+# =======================
+# /icon : プロセスのアイコン取得
+# =======================
+@app.get('/icon')
+def get_icon():
+    pid_arg = request.args.get('pid')
+    if not pid_arg:
+        return jsonify({"status": "error", "message": "missing pid"}), 400
+    try:
+        pid = int(pid_arg)
+    except Exception:
+        return jsonify({"status": "error", "message": "invalid pid"}), 400
+
+    try:
+        p = psutil.Process(pid)
+        exe_path = p.exe()
+    except Exception as e:
+        print(f"[/icon] process lookup error: {e}")
+        return jsonify({"status": "error", "message": "process not found"}), 404
+
+    tmp = None
+    try:
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+        tmp.close()
+        ok = extract_icon(exe_path, tmp.name)
+        if not ok:
+            try: os.remove(tmp.name)
+            except Exception: pass
+            return jsonify({"status": "error", "message": "icon extraction failed"}), 500
+        with open(tmp.name, 'rb') as f:
+            b = f.read()
+        data_url = 'data:image/png;base64,' + base64.b64encode(b).decode('ascii')
+
+        try: os.remove(tmp.name)
+        except Exception: pass
+        return jsonify({"status": "ok", "data_url": data_url})
+    except Exception as e:
+        print(f"[/icon] ERROR: {e}")
+        if tmp:
+            try: os.remove(tmp.name)
+            except Exception: pass
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# =======================
+# /exe : プロセスの実行ファイルパス取得
+# =======================
+@app.get("/exe")
+def get_exe_path():
+    pid_arg = request.args.get("pid")
+    if not pid_arg:
+        return jsonify({"status": "error", "message": "missing pid"}), 400
+    try:
+        pid = int(pid_arg)
+    except Exception:
+        return jsonify({"status": "error", "message": "invalid pid"}), 400
+
+    try:
+        p = psutil.Process(pid)
+        exe = p.exe()
+        return jsonify({"status": "ok", "exe": exe})
+    except Exception as e:
+        print(f"[/exe] ERROR: {e}")
+        return jsonify({"status": "error", "message": "exe not found"}), 404
+
+# =======================
+# メイン実行
+# =======================
+if __name__ == "__main__":
+    app.run(port=8823)
