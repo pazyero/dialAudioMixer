@@ -1,5 +1,5 @@
 // =======================
-// DialAudioMixer main_render.js
+// DialAudioMixer main.js
 // =======================
 
 // WebSocket接続用
@@ -15,7 +15,7 @@ let settings = {};
 // 中断コントローラー（fetchタイムアウト用）
 const timeoutId = setTimeout(() => controller.abort(), 500); // 500ms = 0.5秒
 
-console.log('DialAudioMixer main_render.js loaded');
+console.log('DialAudioMixer main.js loaded');
 
 // =======================
 // Stream Deckとの接続
