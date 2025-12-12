@@ -46,8 +46,6 @@ function connectElgatoPlugin(inUUID, inMessage, inAppInfo, inActionInfo) {
   pluginUUID = inUUID;
   try {
     websocket = new WebSocket("ws://127.0.0.1:" + inAppInfo.port);
-    sendDebug(inAppInfo.port);
-    sendDebug(websocket);
   } catch (e) {
     sendDebug('WebSocket error: ' + String(e));
     console.error('WebSocket create error', e, inAppInfo);
@@ -63,9 +61,7 @@ function connectElgatoPlugin(inUUID, inMessage, inAppInfo, inActionInfo) {
 
     // 定期的にアプリ情報と音量情報を取得
     if (window.__damp_pollInterval) clearInterval(window.__damp_pollInterval);
-    window.__damp_pollInterval = setInterval(fetchApps, 3000);
-    if (window.__damp_volInterval) clearInterval(window.__damp_volInterval);
-    window.__damp_volInterval = setInterval(fetchCurrentVolume, 2000);
+    window.__damp_pollInterval = setInterval(fetchApps, 2000);
   };
 
   websocket.onmessage = function (evt) {
@@ -73,7 +69,6 @@ function connectElgatoPlugin(inUUID, inMessage, inAppInfo, inActionInfo) {
     try { msg = JSON.parse(evt.data); } catch (e) { return; }
 
     const ev = msg.event;
-    sendDebug(ev);
 
     // ボタン表示時のコンテキスト取得
     if (ev === "willAppear") {
@@ -120,18 +115,18 @@ function connectElgatoPlugin(inUUID, inMessage, inAppInfo, inActionInfo) {
 let currentIndex = 1;
 let apps = [];
 let currentVolume = 0.5;
-// PIDごとのアイコンキャッシュ
+// アプリ名称ごとのアイコンキャッシュ
 const iconCache = {};
 
 // アプリアイコン取得
 async function fetchIconForApp(pid, name) {
-  if (iconCache[pid]) return iconCache[pid];
+  if (iconCache[name]){return iconCache[name];}
   try {
     const res = await fetch(`http://127.0.0.1:8823/icon?pid=${pid}`);
     if (!res.ok) throw new Error('no icon');
     const j = await res.json();
     if (j && j.data_url) {
-      iconCache[pid] = j.data_url;
+      iconCache[name] = j.data_url;
       return j.data_url;
     }
   } catch (e) {
@@ -155,7 +150,7 @@ function rotateNextApp() {
   if (currentIndex > apps.length) currentIndex = 1;
   sendDebug('rotateNextApp called, apps.length=' + apps.length + ', currentIndex=' + currentIndex);
   updateDialTitle();
-  fetchCurrentVolume();
+  fetchApps();
 }
 
 // ダイヤルタイトル（アプリ名 + 音量）更新
@@ -175,15 +170,14 @@ function updateDialTitle() {
   try {
     const volPercent = Math.round(currentVolume * 100);
     const active = getActiveApp();
-    const iconData = active && iconCache[active.pid] ? iconCache[active.pid] : null;
+    const iconData = active && iconCache[active.name] ? iconCache[active.name] : null;
     const imgData = iconData || renderImageForDial(title, volPercent);
     const ctx = actionContext || pluginUUID;
-    const payload = { 
-      event: "setFeedback", 
-      context: ctx, 
+    const payload = {
+      event: "setFeedback",
+      context: ctx,
       payload: { title: title, value: volPercent +'%', indicator: { value: volPercent }, icon: imgData } 
     };
-    sendDebug('setFeedback payload: ' + (payload && payload.payload && payload.payload.image ? '[image data]' : JSON.stringify(payload)));
     websocket.send(JSON.stringify(payload));
   } catch (e) {
     sendDebug('updateDialTitle image send error: ' + String(e));
@@ -206,20 +200,17 @@ function updateVolumeDisplay() {
     const app = getActiveApp();
     if (!app) return;
     const volPercent = Math.round(currentVolume * 100);
-    const iconData = iconCache[app.pid] ? iconCache[app.pid] : null;
-    const imgData = iconData || renderImageForDial(app.name, volPercent);
     const ctx = actionContext || pluginUUID;
 
-    const payload = { 
-      event: "setFeedback", 
-      context: ctx, 
+    const payload = {
+      event: "setFeedback",
+      context: ctx,
       payload: { title: title, value: volPercent+'%', indicator: { value: volPercent } } // 画像なしで送信
     };
 
     // デバッグログ
-    sendDebug('setFeedback payload: ' + (payload && payload.payload && payload.payload.image ? '[image data]' : JSON.stringify(payload)));
     websocket.send(JSON.stringify(payload));
-  } catch (e) { 
+  } catch (e) {
     sendDebug('updateVolumeDisplay image error: ' + String(e)); 
   }
 }
@@ -238,25 +229,8 @@ function adjustVolume(ticks) {
   updateVolumeDisplay();
 
   
-  fetch(`http://127.0.0.1:8823/volume_set?pid=${app.pid}&vol=${currentVolume}`).catch(() => {})
+  fetch(`http://127.0.0.1:8823/volume_set?guid=${app.guid}&vol=${currentVolume}`).catch(() => {})
   .finally(() => clearTimeout(timeoutId));;
-}
-
-// 現在音量を取得して同期
-function fetchCurrentVolume() {
-  const app = getActiveApp();
-  if (!app) return;
-
-  fetch(`http://127.0.0.1:8823/volume?pid=${app.pid}&delta=0`)
-    .then(res => res.json())
-    .then(data => {
-      if (data.volume !== undefined) {
-        currentVolume = data.volume;
-        updateVolumeDisplay();
-      }
-    })
-    .catch(err => { sendDebug('fetchCurrentVolume error: ' + String(err)); })
-    .finally(() => clearTimeout(timeoutId));;
 }
 
 // =======================
@@ -269,7 +243,7 @@ function fetchApps() {
       if (!Array.isArray(list)) return;
 
       const prevLen = apps.length;
-      apps = list.map(i => ({ pid: i.pid, name: i.name }));
+      apps = list.map(i => ({ pid: i.pid, guid: i.guid, name: i.name, volume: i.volume }));
 
       if (apps.length < prevLen) currentIndex = 1;
       if (currentIndex < 1 || currentIndex > apps.length) currentIndex = apps.length > 0 ? 1 : 0;
@@ -278,7 +252,10 @@ function fetchApps() {
       apps.forEach(app => {
         fetchIconForApp(app.pid, app.name).then(icon => {
           const active = getActiveApp();
-          if (active && active.pid === app.pid) updateDialTitle();
+          if (active && active.pid === app.pid) {
+            currentVolume = app.volume;
+            updateDialTitle();
+          }
         });
       });
 

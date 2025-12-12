@@ -58,16 +58,22 @@ def list_audio_apps():
         # pycawが利用可能な場合、音声セッションからPIDを取得
         try:
             sessions = AudioUtilities.GetAllSessions()
-            audio_pids = {session.Process.pid for session in sessions if session.Process}
             
-            # 除外リストと重複を除いてアプリ情報作成
-            for pid in audio_pids:
+            for session in sessions:
                 try:
-                    p = psutil.Process(pid)
-                    name_with_ext = p.name()
-                    name, ext = os.path.splitext(name_with_ext)  # ext = ".exe", name = "Discord"
+                    ctl = session._ctl
+                    guid = str(ctl.GetGroupingParam())
+                    p = psutil.Process(session.Process.pid)
+                    name, ext = os.path.splitext(session.Process.name())  # ext = ".exe", name = "Discord"
+
+                    volume = session._ctl.QueryInterface(ISimpleAudioVolume)
+                    try:
+                        current = volume.GetMasterVolume()
+                    except Exception:
+                        current = 0.0
+                    final_volume = min(1.0, max(0.0, current + (0 / 100.0)))
                     if name not in excluded and name not in seen_names:
-                        result.append({"pid": pid, "name": name})
+                        result.append({"pid": session.Process.pid,"guid": guid, "name": name, "volume": final_volume})
                         seen_names.add(name)
                 except Exception:
                     pass
@@ -81,7 +87,9 @@ def list_audio_apps():
                 result.append({"pid": p.info["pid"], "name": name})
                 seen_names.add(name)
     
+    
     return jsonify(result)
+
 
 # =======================
 # /exclude : アプリ名を除外リストに追加
@@ -111,46 +119,6 @@ def remove_exclude():
         save_excluded(excluded)
     return jsonify({"status": "ok"})
 
-# =======================
-# /volume : 音量を増減（低遅延で取得用）
-# =======================
-@app.get("/volume")
-def change_volume():
-    if not PYCAW_AVAILABLE:
-        return jsonify({"status": "error", "message": "pycaw not installed"}), 500
-    
-    pid_arg = request.args.get("pid")
-    delta_arg = request.args.get("delta")
-    try:
-        pid = int(pid_arg)
-        delta = int(delta_arg)
-    except Exception:
-        return jsonify({"status": "error", "message": "invalid pid or delta"}), 400
-
-    sessions = AudioUtilities.GetAllSessions()
-    matched = False
-    final_volume = None
-
-    for session in sessions:
-        proc = session.Process
-        if proc and proc.pid == pid:
-            try:
-                volume = session._ctl.QueryInterface(ISimpleAudioVolume)
-                try:
-                    current = volume.GetMasterVolume()
-                except Exception:
-                    current = 0.0
-                new = min(1.0, max(0.0, current + (delta / 100.0)))
-                volume.SetMasterVolume(new, None)
-                matched = True
-                final_volume = new
-            except Exception as e:
-                return jsonify({"status": "error", "message": str(e)}), 500
-
-    if not matched:
-        return jsonify({"status": "error", "message": "audio session not found for pid"}), 404
-
-    return jsonify({"status": "ok", "volume": final_volume})
 
 # =======================
 # /volume_set : 絶対値で音量設定
@@ -160,10 +128,9 @@ def set_volume_absolute():
     if not PYCAW_AVAILABLE:
         return jsonify({"status": "error", "message": "pycaw not installed"}), 500
     
-    pid_arg = request.args.get("pid")
+    guid_arg = request.args.get("guid")
     vol_arg = request.args.get("vol")
     try:
-        pid = int(pid_arg)
         vol = float(vol_arg)
     except Exception:
         return jsonify({"status": "error", "message": "invalid pid or vol"}), 400
@@ -173,14 +140,11 @@ def set_volume_absolute():
     matched = False
 
     for session in sessions:
-        proc = session.Process
-        if proc and proc.pid == pid:
-            try:
-                volume = session._ctl.QueryInterface(ISimpleAudioVolume)
-                volume.SetMasterVolume(vol, None)
-                matched = True
-            except Exception as e:
-                return jsonify({"status": "error", "message": str(e)}), 500
+        ctl = session._ctl
+        guid = str(ctl.GetGroupingParam())
+        if guid == guid_arg:
+            volctl = ctl.QueryInterface(ISimpleAudioVolume)
+            volctl.SetMasterVolume(vol, None)
 
     if not matched:
         return jsonify({"status": "error", "message": "audio session not found for pid"}), 404
@@ -241,27 +205,6 @@ def get_icon():
             try: os.remove(tmp.name)
             except Exception: pass
         return jsonify({"status": "error", "message": str(e)}), 500
-
-# =======================
-# /exe : プロセスの実行ファイルパス取得
-# =======================
-@app.get("/exe")
-def get_exe_path():
-    pid_arg = request.args.get("pid")
-    if not pid_arg:
-        return jsonify({"status": "error", "message": "missing pid"}), 400
-    try:
-        pid = int(pid_arg)
-    except Exception:
-        return jsonify({"status": "error", "message": "invalid pid"}), 400
-
-    try:
-        p = psutil.Process(pid)
-        exe = p.exe()
-        return jsonify({"status": "ok", "exe": exe})
-    except Exception as e:
-        print(f"[/exe] ERROR: {e}")
-        return jsonify({"status": "error", "message": "exe not found"}), 404
 
 # =======================
 # メイン実行
