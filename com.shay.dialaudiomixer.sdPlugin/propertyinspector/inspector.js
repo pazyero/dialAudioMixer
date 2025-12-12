@@ -1,19 +1,6 @@
 const list = document.getElementById("appList");
 const refreshBtn = document.getElementById("refresh");
 
-async function getVolume(pid) {
-  try {
-    const r = await fetch(`http://127.0.0.1:8823/volume?pid=${pid}&delta=0`);
-    const data = await r.json();
-    if (data.volume !== undefined) {
-      return Math.round(data.volume * 100);
-    }
-  } catch (e) {
-    console.error('getVolume error', e);
-  }
-  return null;
-}
-
 async function loadApps() {
   try {
     const r = await fetch("http://127.0.0.1:8823/apps");
@@ -21,9 +8,8 @@ async function loadApps() {
     list.innerHTML = "";
     for (const a of apps) {
       const li = document.createElement("li");
-      const volPercent = await getVolume(a.pid);
-      const volStr = volPercent !== null ? volPercent + '%' : '--';
-      li.innerHTML = `${a.name} (PID ${a.pid}) - <span id="vol-${a.pid}">` + volStr + `</span> <button data-name="${a.name}">Exclude</button>`;
+      const volume = Math.round(a.volume * 100);
+      li.innerHTML = `${a.name} - <span id="vol-${a.name}">` +  volume + '%' + `</span> <button data-name="${a.name}">Exclude</button>`;
       list.appendChild(li);
     }
   } catch (e) {
