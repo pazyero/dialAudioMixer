@@ -224,12 +224,12 @@ function adjustVolume(ticks) {
   if (!app) return;
 
   currentVolume = Math.min(1.0, Math.max(0.0, currentVolume + (ticks * step)));
-  sendDebug('adjustVolume: local vol=' + currentVolume.toFixed(2) + ', ticks=' + ticks + ', pid=' + app.pid);
+  sendDebug('adjustVolume: local vol=' + currentVolume.toFixed(2) + `, name=${app.name}&vol=${currentVolume}`);
 
   updateVolumeDisplay();
 
   
-  fetch(`http://127.0.0.1:8823/volume_set?guid=${app.guid}&vol=${currentVolume}`).catch(() => {})
+  fetch(`http://127.0.0.1:8823/volume_set?name=${app.name}&vol=${currentVolume}`).catch(() => {})
   .finally(() => clearTimeout(timeoutId));;
 }
 

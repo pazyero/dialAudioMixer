@@ -72,6 +72,7 @@ def list_audio_apps():
                     except Exception:
                         current = 0.0
                     final_volume = min(1.0, max(0.0, current + (0 / 100.0)))
+                    print(f"[/apps] PID={session.Process.pid}, Name={name}, GUID={guid}, Volume={final_volume}" )
                     if name not in excluded and name not in seen_names:
                         result.append({"pid": session.Process.pid,"guid": guid, "name": name, "volume": final_volume})
                         seen_names.add(name)
@@ -86,8 +87,7 @@ def list_audio_apps():
             if name not in excluded and name not in seen_names:
                 result.append({"pid": p.info["pid"], "name": name})
                 seen_names.add(name)
-    
-    
+
     return jsonify(result)
 
 
@@ -128,7 +128,7 @@ def set_volume_absolute():
     if not PYCAW_AVAILABLE:
         return jsonify({"status": "error", "message": "pycaw not installed"}), 500
     
-    guid_arg = request.args.get("guid")
+    name_arg = request.args.get("name")
     vol_arg = request.args.get("vol")
     try:
         vol = float(vol_arg)
@@ -137,17 +137,16 @@ def set_volume_absolute():
 
     vol = min(1.0, max(0.0, vol))
     sessions = AudioUtilities.GetAllSessions()
-    matched = False
 
     for session in sessions:
-        ctl = session._ctl
-        guid = str(ctl.GetGroupingParam())
-        if guid == guid_arg:
+        try:
+            ctl = session._ctl
+            name, ext = os.path.splitext(session.Process.name()) 
+        except Exception:
+            continue
+        if name == name_arg:
             volctl = ctl.QueryInterface(ISimpleAudioVolume)
             volctl.SetMasterVolume(vol, None)
-
-    if not matched:
-        return jsonify({"status": "error", "message": "audio session not found for pid"}), 404
 
     return jsonify({"status": "ok", "volume": vol})
 
