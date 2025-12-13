@@ -15,6 +15,8 @@ let settings = {};
 // 中断コントローラー（fetchタイムアウト用）
 const timeoutId = setTimeout(() => controller.abort(), 500); // 500ms = 0.5秒
 
+const muteOverlaySrc = "./images/mute_overlay.png"; // 144x144, 透明背景
+
 console.log('DialAudioMixer main.js loaded');
 
 // =======================
@@ -70,6 +72,8 @@ function connectElgatoPlugin(inUUID, inMessage, inAppInfo, inActionInfo) {
 
     const ev = msg.event;
 
+    sendDebug(ev);
+
     // ボタン表示時のコンテキスト取得
     if (ev === "willAppear") {
       actionContext = msg.context;
@@ -88,6 +92,12 @@ function connectElgatoPlugin(inUUID, inMessage, inAppInfo, inActionInfo) {
     if (ev === "dialDown") {
       rotateNextApp();
     }
+
+    // ディスプレイ部分タッチイベント
+    if (ev === "touchTap") {
+      adjustMute();
+    }
+
 
     // ダイヤル回転イベント
     let ticks = 0;
@@ -114,7 +124,6 @@ function connectElgatoPlugin(inUUID, inMessage, inAppInfo, inActionInfo) {
 // =======================
 let currentIndex = 1;
 let apps = [];
-let currentVolume = 0.5;
 // アプリ名称ごとのアイコンキャッシュ
 const iconCache = {};
 
@@ -154,52 +163,46 @@ function rotateNextApp() {
 }
 
 // ダイヤルタイトル（アプリ名 + 音量）更新
-function updateDialTitle() {
+async function updateDialTitle() {
   if (!websocket || websocket.readyState !== 1) return;
 
   const app = getActiveApp();
-  if (app) title = app.name;
+   if (!app) return;
 
-  // HTML上の表示も更新
-  const dispEl = document.getElementById('display');
-  if (dispEl) {
-    const volPercent = Math.round(currentVolume * 100);
-    dispEl.textContent = title + '\n' + volPercent + '%';
-  }
+  const volPercent = Math.round(app.volume * 100);
+  const imgData = await renderImageForDial(app.name, volPercent, app.mute, iconCache[app.name] || null);
 
-  try {
-    const volPercent = Math.round(currentVolume * 100);
-    const active = getActiveApp();
-    const iconData = active && iconCache[active.name] ? iconCache[active.name] : null;
-    const imgData = iconData || renderImageForDial(title, volPercent);
-    const ctx = actionContext || pluginUUID;
-    const payload = {
-      event: "setFeedback",
-      context: ctx,
-      payload: { title: title, value: volPercent +'%', indicator: { value: volPercent }, icon: imgData } 
-    };
-    websocket.send(JSON.stringify(payload));
-  } catch (e) {
-    sendDebug('updateDialTitle image send error: ' + String(e));
-    try {
-      let payload = { event: "setTitle", context: pluginUUID, payload: { title: title } };
-      websocket.send(JSON.stringify(payload));
-    } catch (e2) { sendDebug('updateDialTitle setTitle fallback failed: ' + String(e2)); }
-  }
+  const ctx = actionContext || pluginUUID;
+  websocket.send(JSON.stringify({
+    event: "setFeedback",
+    context: ctx,
+    payload: {
+      title: app.name,
+      value: volPercent + '%',
+      indicator: { value: volPercent },
+      icon: imgData
+    }
+  }));
 }
+
 
 // 音量表示更新
 function updateVolumeDisplay() {
+  volume = 0.0;
+  const app = getActiveApp();
+  if (app){
+    title = app.name;
+    volume = app.volume;
+  }
   const dispEl = document.getElementById('display');
   if (dispEl && getActiveApp()) {
-    const volPercent = Math.round(currentVolume * 100);
+    const volPercent = Math.round(volume * 100);
     dispEl.textContent = getActiveApp().name + '\n' + volPercent + '%';
   }
 
   try {
-    const app = getActiveApp();
     if (!app) return;
-    const volPercent = Math.round(currentVolume * 100);
+    const volPercent = Math.round(volume * 100);
     const ctx = actionContext || pluginUUID;
 
     const payload = {
@@ -215,6 +218,28 @@ function updateVolumeDisplay() {
   }
 }
 
+
+// =======================
+//  ミュート切替
+// =======================
+function adjustMute() {
+  const app = getActiveApp();
+  if (!app) return;
+
+ sendDebug(app.mute);
+  mute = ! app.mute;
+  sendDebug('adjustVolume: local vol=' + app.volume.toFixed(2) + `, name=${app.name}&mute=${mute}`);
+
+  app.mute = mute
+  updateDialTitle();
+
+  fetch(`http://127.0.0.1:8823/mute_set?name=${app.name}&mute=${mute}`).catch(() => {})
+  .finally(() => clearTimeout(timeoutId));
+}
+
+
+
+
 // =======================
 // 音量調整
 // =======================
@@ -223,13 +248,13 @@ function adjustVolume(ticks) {
   const app = getActiveApp();
   if (!app) return;
 
-  currentVolume = Math.min(1.0, Math.max(0.0, currentVolume + (ticks * step)));
-  sendDebug('adjustVolume: local vol=' + currentVolume.toFixed(2) + `, name=${app.name}&vol=${currentVolume}`);
+  volume = Math.min(1.0, Math.max(0.0, app.volume + (ticks * step)));
+  sendDebug('adjustVolume: local vol=' + app.volume.toFixed(2) + `, name=${app.name}&vol=${app.volume}`);
 
+  app.volume= volume
   updateVolumeDisplay();
 
-  
-  fetch(`http://127.0.0.1:8823/volume_set?name=${app.name}&vol=${currentVolume}`).catch(() => {})
+  fetch(`http://127.0.0.1:8823/volume_set?name=${app.name}&vol=${volume}`).catch(() => {})
   .finally(() => clearTimeout(timeoutId));;
 }
 
@@ -243,7 +268,7 @@ function fetchApps() {
       if (!Array.isArray(list)) return;
 
       const prevLen = apps.length;
-      apps = list.map(i => ({ pid: i.pid, guid: i.guid, name: i.name, volume: i.volume }));
+      apps = list.map(i => ({ pid: i.pid, mute:i.mute, name: i.name, volume: i.volume }));
 
       if (apps.length < prevLen) currentIndex = 1;
       if (currentIndex < 1 || currentIndex > apps.length) currentIndex = apps.length > 0 ? 1 : 0;
@@ -253,7 +278,6 @@ function fetchApps() {
         fetchIconForApp(app.pid, app.name).then(icon => {
           const active = getActiveApp();
           if (active && active.pid === app.pid) {
-            currentVolume = app.volume;
             updateDialTitle();
           }
         });
@@ -268,54 +292,87 @@ function fetchApps() {
 // =======================
 // ダイヤル用画像生成（Base64 PNG）
 // =======================
-function renderImageForDial(title, volPercent) {
-  const size = 144;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
+function renderImageForDial(title, volPercent, muted = false, iconSrc = null) {
+  return new Promise((resolve) => {
+    const size = 144;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
 
-  // 背景
-  ctx.fillStyle = '#000000';
-  ctx.fillRect(0, 0, size, size);
+    // 背景は透明
+    ctx.clearRect(0, 0, size, size);
 
-  const cx = size / 2;
-  const cy = size / 2 - 8;
-  const radius = Math.min(size, size) * 0.35;
+    const drawOverlay = () => {
+      if (muted) {
+        const overlay = new Image();
+        overlay.src = muteOverlaySrc;
+        overlay.onload = () => {
+          ctx.drawImage(overlay, 0, 0, size, size);
+          resolve(canvas.toDataURL('image/png'));
+        };
+        overlay.onerror = () => resolve(canvas.toDataURL('image/png'));
+      } else {
+        resolve(canvas.toDataURL('image/png'));
+      }
+    };
 
-  // 外円
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius + 8, 0, 2 * Math.PI);
-  ctx.fillStyle = '#111';
-  ctx.fill();
+    if (iconSrc) {
+      // アイコン描画
+      const img = new Image();
+      img.src = iconSrc;
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0, size, size);
+        drawOverlay();
+      };
+      img.onerror = () => {
+        // アイコン読み込み失敗時は円表示
+        drawCircleDisplay();
+        drawOverlay();
+      };
+    } else {
+      // アイコンなし → 円＋音量
+      drawCircleDisplay();
+      drawOverlay();
+    }
 
-  // 内円
-  ctx.beginPath();
-  ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
-  ctx.fillStyle = '#222';
-  ctx.fill();
+    function drawCircleDisplay() {
+      const cx = size / 2;
+      const cy = size / 2 - 8;
+      const radius = Math.min(size, size) * 0.35;
 
-  // 音量バー
-  const start = -Math.PI / 2;
-  const end = start + (volPercent / 100) * 2 * Math.PI;
-  ctx.beginPath();
-  ctx.moveTo(cx, cy);
-  ctx.arc(cx, cy, radius - 4, start, end);
-  ctx.closePath();
-  ctx.fillStyle = '#00cc88';
-  ctx.fill();
+      // 外円
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius + 8, 0, 2 * Math.PI);
+      ctx.fillStyle = '#111';
+      ctx.fill();
 
-  // 音量文字
-  ctx.fillStyle = '#fff';
-  ctx.font = Math.floor(size * 0.12) + 'px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText(volPercent + '%', cx, cy + radius + 20);
+      // 内円
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, 2 * Math.PI);
+      ctx.fillStyle = '#222';
+      ctx.fill();
 
-  // アプリ名
-  ctx.font = Math.floor(size * 0.09) + 'px sans-serif';
-  const short = title.length > 16 ? title.slice(0, 13) + '...' : title;
-  ctx.fillText(short, cx, size - 8);
+      // 音量バー
+      const start = -Math.PI / 2;
+      const end = start + (volPercent / 100) * 2 * Math.PI;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, radius - 4, start, end);
+      ctx.closePath();
+      ctx.fillStyle = '#00cc88';
+      ctx.fill();
 
-  // Base64 PNGデータとして返す
-  return canvas.toDataURL('image/png');
+      // 音量文字
+      ctx.fillStyle = '#fff';
+      ctx.font = Math.floor(size * 0.12) + 'px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(volPercent + '%', cx, cy + radius + 20);
+
+      // アプリ名
+      ctx.font = Math.floor(size * 0.09) + 'px sans-serif';
+      const short = title.length > 16 ? title.slice(0, 13) + '...' : title;
+      ctx.fillText(short, cx, size - 8);
+    }
+  });
 }

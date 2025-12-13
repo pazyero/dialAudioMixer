@@ -53,28 +53,30 @@ def list_audio_apps():
     excluded = load_excluded()
     result = []
     seen_names = set()
-    
+
     if PYCAW_AVAILABLE:
         # pycawが利用可能な場合、音声セッションからPIDを取得
         try:
             sessions = AudioUtilities.GetAllSessions()
-            
+
             for session in sessions:
                 try:
                     ctl = session._ctl
-                    guid = str(ctl.GetGroupingParam())
                     p = psutil.Process(session.Process.pid)
                     name, ext = os.path.splitext(session.Process.name())  # ext = ".exe", name = "Discord"
 
                     volume = session._ctl.QueryInterface(ISimpleAudioVolume)
+
                     try:
-                        current = volume.GetMasterVolume()
+                        current_volume = volume.GetMasterVolume()
+                        current_mute = volume.GetMute()
                     except Exception:
-                        current = 0.0
-                    final_volume = min(1.0, max(0.0, current + (0 / 100.0)))
-                    print(f"[/apps] PID={session.Process.pid}, Name={name}, GUID={guid}, Volume={final_volume}" )
+                        current_volume = 0.0
+
+                    final_volume = min(1.0, max(0.0, current_volume + (0 / 100.0)))
+                    print(f"[/apps] pid={session.Process.pid}, name={name}, vol={final_volume}, mute={current_mute}")
                     if name not in excluded and name not in seen_names:
-                        result.append({"pid": session.Process.pid,"guid": guid, "name": name, "volume": final_volume})
+                        result.append({"pid": session.Process.pid,"mute": current_mute, "name": name, "volume": final_volume})
                         seen_names.add(name)
                 except Exception:
                     pass
@@ -118,6 +120,32 @@ def remove_exclude():
         excluded.remove(name)
         save_excluded(excluded)
     return jsonify({"status": "ok"})
+
+
+# =======================
+# /mute : ミュート設定・解除
+# =======================
+@app.get("/mute_set")
+def set_mute_absolute():
+    if not PYCAW_AVAILABLE:
+        return jsonify({"status": "error", "message": "pycaw not installed"}), 500
+
+    name_arg = request.args.get("name")
+    mute_arg = request.args.get("mute")
+    mute = mute_arg.lower() in ("1", "true", "yes")
+
+    sessions = AudioUtilities.GetAllSessions()
+    for session in sessions:
+        try:
+            ctl = session._ctl
+            name, ext = os.path.splitext(session.Process.name())
+        except Exception:
+            continue
+        if name == name_arg:
+            volctl = ctl.QueryInterface(ISimpleAudioVolume)
+            volctl.SetMute(mute, None)
+
+    return jsonify({"status": "ok", "mute": mute})
 
 
 # =======================
