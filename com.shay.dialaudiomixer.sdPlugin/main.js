@@ -17,7 +17,6 @@ const timeoutId = setTimeout(() => controller.abort(), 500); // 500ms = 0.5秒
 
 const muteOverlaySrc = "./images/mute_overlay.png"; // 144x144, 透明背景
 
-console.log('DialAudioMixer main.js loaded');
 
 // =======================
 // Stream Deckとの接続

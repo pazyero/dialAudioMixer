@@ -24,12 +24,17 @@ app = Flask(__name__)
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 app.logger.disabled = True
 
-EXCLUDE_FILE = "exclude.json"
+# 除外リストファイルの固定場所: プラグインルートに置く
+PLUGIN_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+EXCLUDE_FILE = os.path.join(PLUGIN_ROOT, 'exclude.json')
 
 # 初期化: 除外リストファイルが無ければ作成
 if not os.path.exists(EXCLUDE_FILE):
-    with open(EXCLUDE_FILE, "w", encoding="utf-8") as f:
-        json.dump([], f)
+    try:
+        with open(EXCLUDE_FILE, "w", encoding="utf-8") as f:
+            json.dump([], f)
+    except Exception as e:
+        print(f"[helper] failed to create exclude file: {e}")
 
 # =======================
 # 除外リスト読み込み/保存
@@ -43,6 +48,17 @@ def save_excluded(lst):
     """除外リストを保存"""
     with open(EXCLUDE_FILE, "w", encoding="utf-8") as f:
         json.dump(lst, f, indent=2)
+
+
+# =======================
+# /excluded : 除外リストの取得
+# =======================
+@app.get("/excluded")
+def get_excluded():
+    try:
+        return jsonify(load_excluded())
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # =======================
 # /apps : 音声セッションのあるアプリ一覧取得
