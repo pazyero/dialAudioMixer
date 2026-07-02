@@ -1,4 +1,4 @@
-# DialAudioMixer for Stream Deck
+# DialAudioMixer for Stream Deck +
 
 ## 概要
 **DialAudioMixer** は、Elgato Stream Deck 用のプラグインで、Windows上のアクティブなオーディオアプリを管理し、ダイヤル操作で個別アプリの音量を調整できるプラグインです。
